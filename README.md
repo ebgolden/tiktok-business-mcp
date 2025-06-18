@@ -62,14 +62,20 @@ npm run build
    - Create an account and register your application
 
 2. **Get API Credentials**
-   - Obtain your App ID and App Secret
-   - Set up OAuth2 flow to get access tokens
-   - Configure redirect URLs for your application
+   - Obtain your **Access Token** (long-term token recommended)
+   - Get your **Advertiser ID** from TikTok Ads Manager
+   - Optional: App ID and App Secret for token refresh functionality
 
-3. **Authentication Flow**
-   - Direct users to TikTok's authorization URL
-   - Exchange authorization codes for access tokens
-   - Use access tokens with the MCP tools
+### Environment Variables Setup
+
+Set these environment variables with your TikTok API credentials:
+
+```bash
+export TIKTOK_ACCESS_TOKEN="your_long_term_access_token"
+export TIKTOK_ADVERTISER_ID="your_advertiser_id"
+export TIKTOK_APP_ID="your_app_id"              # Optional, for token refresh
+export TIKTOK_APP_SECRET="your_app_secret"      # Optional, for token refresh
+```
 
 ### MCP Client Setup
 
@@ -80,7 +86,13 @@ Add this server to your MCP client configuration:
   "mcpServers": {
     "tiktok-business-api": {
       "command": "node",
-      "args": ["path/to/tiktok-business-api-mcp/dist/index.js"]
+      "args": ["path/to/tiktok-business-api-mcp/dist/index.js"],
+      "env": {
+        "TIKTOK_ACCESS_TOKEN": "your_long_term_access_token",
+        "TIKTOK_ADVERTISER_ID": "your_advertiser_id",
+        "TIKTOK_APP_ID": "your_app_id",
+        "TIKTOK_APP_SECRET": "your_app_secret"
+      }
     }
   }
 }
@@ -90,13 +102,11 @@ Add this server to your MCP client configuration:
 
 ### Campaign Management
 
-#### Create a Campaign
+#### Create a Campaign (No credentials needed in prompt)
 ```javascript
 {
   "tool": "tiktok_campaign_create",
   "arguments": {
-    "access_token": "your_access_token",
-    "advertiser_id": "your_advertiser_id",
     "campaign_name": "Holiday Sales Campaign",
     "objective_type": "CONVERSIONS",
     "budget": 1000.00,
@@ -105,18 +115,32 @@ Add this server to your MCP client configuration:
 }
 ```
 
-#### Get Campaign Information
+#### Get Campaign Information (No credentials needed in prompt)
 ```javascript
 {
   "tool": "tiktok_campaign_get",
   "arguments": {
-    "access_token": "your_access_token",
-    "advertiser_id": "your_advertiser_id",
     "page": 1,
     "page_size": 20
   }
 }
 ```
+
+#### Update Campaign (Requires access token)
+```javascript
+{
+  "tool": "tiktok_campaign_update",
+  "arguments": {
+    "access_token": "your_access_token",
+    "advertiser_id": "your_advertiser_id",
+    "campaign_id": "campaign_12345",
+    "campaign_name": "Updated Holiday Sales Campaign",
+    "budget": 1500.00
+  }
+}
+```
+
+**⚠️ Important:** Some tools use environment variables automatically (like `tiktok_campaign_create` and `tiktok_campaign_get`), while others still require `access_token` and `advertiser_id` parameters. Check the tool descriptions for requirements.
 
 ### Creative Management
 
@@ -224,16 +248,17 @@ Add this server to your MCP client configuration:
 
 ## Authentication
 
-All tools require a valid TikTok API access token. The authentication flow typically involves:
+All tools require a valid TikTok API access token. The server loads credentials from environment variables:
 
-1. **OAuth2 Authorization**: Direct users to TikTok's OAuth endpoint
-2. **Code Exchange**: Exchange authorization code for access token
-3. **Token Usage**: Include access token in tool calls
+- **TIKTOK_ACCESS_TOKEN**: Your TikTok Business API access token (required)
+- **TIKTOK_ADVERTISER_ID**: Your advertiser account ID (required for most operations)
+- **TIKTOK_APP_ID**: Your app ID (optional, for token refresh)
+- **TIKTOK_APP_SECRET**: Your app secret (optional, for token refresh)
 
 ### Access Token Management
 
-- Access tokens have limited lifespans
-- Implement token refresh logic for long-running applications
+- Use long-term access tokens when possible
+- The server includes automatic token refresh functionality if app credentials are provided
 - Store tokens securely and never expose them in client-side code
 
 ## Error Handling
@@ -282,19 +307,24 @@ Monitor your usage and implement appropriate retry logic.
 ### Common Issues
 
 1. **Authentication Errors**
-   - Verify access token validity
-   - Check token scopes and permissions
-   - Ensure correct advertiser ID
+   - Verify TIKTOK_ACCESS_TOKEN environment variable is set correctly
+   - Check that your access token is valid and not expired
+   - Ensure TIKTOK_ADVERTISER_ID matches your TikTok Ads account
 
-2. **API Errors**
-   - Check parameter validation
-   - Verify required fields are provided
+2. **Environment Variable Issues**
+   - Confirm environment variables are properly set in your MCP client configuration
+   - Check that variable names match exactly (case-sensitive)
+   - Verify there are no extra spaces or quotes in the values
+
+3. **API Errors**
+   - Check parameter validation in tool calls
+   - Verify required fields are provided for each tool
    - Review TikTok API documentation for endpoint-specific requirements
 
-3. **Rate Limiting**
-   - Implement exponential backoff
-   - Monitor API usage dashboard
-   - Consider upgrading API tier if needed
+4. **Server Startup Issues**
+   - The server will exit with an error if TIKTOK_ACCESS_TOKEN is not set
+   - Check console output for specific error messages
+   - Ensure all required dependencies are installed
 
 ### Debug Mode
 
