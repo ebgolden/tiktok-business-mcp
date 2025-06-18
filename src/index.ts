@@ -8,1104 +8,609 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import axios, { AxiosError } from "axios";
+import axios, { AxiosError, AxiosRequestConfig } from "axios";
 import { z } from "zod";
 
-// Base TikTok Business API configuration
-const TIKTOK_API_BASE = "https://business-api.tiktok.com/open_api/v1.3";
-const TIKTOK_AUTH_BASE = "https://business-api.tiktok.com/open_api/v1.3/oauth2";
-
-// Load credentials from environment variables (secure approach)
-const TIKTOK_APP_ID = process.env.TIKTOK_APP_ID;
-const TIKTOK_APP_SECRET = process.env.TIKTOK_APP_SECRET; 
-const TIKTOK_ACCESS_TOKEN = process.env.TIKTOK_ACCESS_TOKEN;
-const TIKTOK_REFRESH_TOKEN = process.env.TIKTOK_REFRESH_TOKEN;
-const DEFAULT_ADVERTISER_ID = process.env.TIKTOK_ADVERTISER_ID;
-
-// Validate required environment variables
-if (!TIKTOK_ACCESS_TOKEN) {
-  console.error("❌ TIKTOK_ACCESS_TOKEN environment variable is required");
-  console.error("💡 Set up your credentials:");
-  console.error("   export TIKTOK_ACCESS_TOKEN='your_long_term_token'");
-  console.error("   export TIKTOK_ADVERTISER_ID='your_advertiser_id'");
-  console.error("   export TIKTOK_APP_ID='your_app_id' (optional, for refresh)");
-  console.error("   export TIKTOK_APP_SECRET='your_app_secret' (optional, for refresh)");
-  process.exit(1);
+// Types and Interfaces
+interface TikTokConfig {
+  accessToken: string;
+  advertiserId: string;
+  appId?: string;
+  appSecret?: string;
+  apiBaseUrl: string;
+  rateLimitRpm: number;
 }
 
-// Token refresh functionality for long-term tokens
-async function refreshAccessToken() {
-  if (!TIKTOK_APP_ID || !TIKTOK_APP_SECRET || !TIKTOK_REFRESH_TOKEN) {
-    throw new Error("Cannot refresh token: Missing app credentials or refresh token");
-  }
-
-  try {
-    const response = await axios.post(`${TIKTOK_AUTH_BASE}/access_token/`, {
-      app_id: TIKTOK_APP_ID,
-      secret: TIKTOK_APP_SECRET,
-      auth_code: TIKTOK_REFRESH_TOKEN,
-      grant_type: "authorization_code"
-    });
-
-    if (response.data.code === 0) {
-      // In a production environment, you'd want to update your stored credentials
-      console.log("✅ Access token refreshed successfully");
-      return response.data.data.access_token;
-    } else {
-      throw new Error(`Token refresh failed: ${response.data.message}`);
-    }
-  } catch (error) {
-    console.error("❌ Failed to refresh access token:", error.message);
-    throw error;
-  }
+interface RateLimiter {
+  requests: number[];
+  maxRequests: number;
+  windowMs: number;
 }
 
-// Common schemas for validation (no longer require tokens in prompts)
-const AdvertiserIdSchema = z.string().min(1, "Advertiser ID is required").optional();
-const CampaignIdSchema = z.string().min(1, "Campaign ID is required");
-const AdGroupIdSchema = z.string().min(1, "Ad Group ID is required");
-const AdIdSchema = z.string().min(1, "Ad ID is required");
+interface APIResponse<T = any> {
+  code: number;
+  message: string;
+  data: T;
+  request_id: string;
+}
 
-// Pagination schema
-const PaginationSchema = z.object({
-  page: z.number().min(1).optional().default(1),
-  page_size: z.number().min(1).max(1000).optional().default(10),
+// Validation Schemas
+const BaseToolSchema = z.object({
+  access_token: z.string().optional(),
+  advertiser_id: z.string().optional(),
 });
 
-// Helper function to make TikTok API requests (using stored credentials)
-async function makeTikTokRequest(
-  endpoint: string,
-  method: "GET" | "POST" | "PUT" | "DELETE",
-  data?: any,
-  params?: any,
-  retryRefresh: boolean = true
-) {
-  try {
-    const config = {
-      method,
-      url: `${TIKTOK_API_BASE}${endpoint}`,
-      headers: {
-        "Access-Token": TIKTOK_ACCESS_TOKEN,
-        "Content-Type": "application/json",
-      },
+const CampaignCreateSchema = BaseToolSchema.extend({
+  campaign_name: z.string().min(1).max(512),
+  objective_type: z.enum(['REACH', 'TRAFFIC', 'APP_INSTALL', 'VIDEO_VIEW', 'LEAD_GENERATION', 'CONVERSIONS', 'CATALOG_SALES']),
+  budget: z.number().positive(),
+  budget_mode: z.enum(['BUDGET_MODE_DAY', 'BUDGET_MODE_TOTAL']),
+  schedule_type: z.enum(['SCHEDULE_FROM_NOW', 'SCHEDULE_START_END']).default('SCHEDULE_FROM_NOW'),
+  schedule_start_time: z.string().optional(),
+  schedule_end_time: z.string().optional(),
+});
+
+const CampaignGetSchema = BaseToolSchema.extend({
+  campaign_ids: z.array(z.string()).optional(),
+  page: z.number().int().positive().default(1),
+  page_size: z.number().int().min(1).max(1000).default(20),
+  filtering: z.object({
+    campaign_name: z.string().optional(),
+    primary_status: z.enum(['ENABLE', 'DISABLE', 'DELETE']).optional(),
+    objective_type: z.string().optional(),
+  }).optional(),
+});
+
+const VideoUploadSchema = BaseToolSchema.extend({
+  video_file: z.string().url().or(z.string().min(1)), // URL or base64
+  upload_type: z.enum(['UPLOAD_BY_FILE', 'UPLOAD_BY_URL', 'UPLOAD_BY_FILE_ID']),
+  video_name: z.string().min(1).max(100),
+  flaw_detect: z.boolean().default(true),
+  auto_bind_enabled: z.boolean().default(true),
+  auto_fix_enabled: z.boolean().default(true),
+});
+
+const ReportSchema = BaseToolSchema.extend({
+  report_type: z.enum(['BASIC', 'AUDIENCE', 'PLAYABLE_REPORT']),
+  data_level: z.enum(['AUCTION_ADVERTISER', 'AUCTION_CAMPAIGN', 'AUCTION_ADGROUP', 'AUCTION_AD']),
+  dimensions: z.array(z.string()).min(1),
+  metrics: z.array(z.string()).min(1),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  filters: z.array(z.object({
+    field_name: z.string(),
+    filter_type: z.enum(['IN', 'EQUALS', 'GREATER_THAN', 'LESS_THAN']),
+    filter_value: z.union([z.string(), z.array(z.string())]),
+  })).optional(),
+  page: z.number().int().positive().default(1),
+  page_size: z.number().int().min(1).max(1000).default(20,
+});
+
+// Enhanced Logger
+class Logger {
+  private context: string;
+
+  constructor(context: string) {
+    this.context = context;
+  }
+
+  private log(level: string, message: string, data?: any) {
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+      timestamp,
+      level,
+      context: this.context,
+      message,
       ...(data && { data }),
-      ...(params && { params }),
+    };
+    console.error(JSON.stringify(logEntry));
+  }
+
+  info(message: string, data?: any) {
+    this.log('INFO', message, data);
+  }
+
+  warn(message: string, data?: any) {
+    this.log('WARN', message, data);
+  }
+
+  error(message: string, error?: any) {
+    this.log('ERROR', message, error instanceof Error ? {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    } : error);
+  }
+
+  debug(message: string, data?: any) {
+    if (process.env.DEBUG === 'true') {
+      this.log('DEBUG', message, data);
+    }
+  }
+}
+
+// Rate Limiter Implementation
+class SimpleRateLimiter {
+  private requests: number[] = [];
+  
+  constructor(
+    private maxRequests: number = 200,
+    private windowMs: number = 60 * 60 * 1000 // 1 hour
+  ) {}
+
+  async checkLimit(): Promise<boolean> {
+    const now = Date.now();
+    // Remove requests outside the window
+    this.requests = this.requests.filter(time => now - time < this.windowMs);
+    
+    if (this.requests.length >= this.maxRequests) {
+      return false;
+    }
+    
+    this.requests.push(now);
+    return true;
+  }
+
+  async waitForAvailability(): Promise<void> {
+    while (!(await this.checkLimit())) {
+      const oldestRequest = Math.min(...this.requests);
+      const waitTime = oldestRequest + this.windowMs - Date.now();
+      if (waitTime > 0) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(waitTime, 1000)));
+      }
+    }
+  }
+}
+
+// Enhanced TikTok API Client
+class TikTokAPIClient {
+  private config: TikTokConfig;
+  private rateLimiter: SimpleRateLimiter;
+  private logger: Logger;
+
+  constructor(config: TikTokConfig) {
+    this.config = config;
+    this.rateLimiter = new SimpleRateLimiter(config.rateLimitRpm);
+    this.logger = new Logger('TikTokAPIClient');
+  }
+
+  private async makeRequest<T>(
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    endpoint: string,
+    data?: any,
+    customConfig?: Partial<AxiosRequestConfig>
+  ): Promise<T> {
+    await this.rateLimiter.waitForAvailability();
+
+    const url = `${this.config.apiBaseUrl}${endpoint}`;
+    const config: AxiosRequestConfig = {
+      method,
+      url,
+      headers: {
+        'Access-Token': this.config.accessToken,
+        'Content-Type': 'application/json',
+        'User-Agent': 'TikTok-Business-MCP-Server/1.0.0',
+      },
+      timeout: 30000,
+      ...customConfig,
     };
 
-    const response = await axios(config);
-    return response.data;
-  } catch (error) {
-    if (error instanceof AxiosError) {
-      // If token expired and we can refresh, try once
-      if (error.response?.status === 401 && retryRefresh && TIKTOK_REFRESH_TOKEN) {
-        try {
-          await refreshAccessToken();
-          return makeTikTokRequest(endpoint, method, data, params, false);
-        } catch (refreshError) {
-          throw new McpError(
-            ErrorCode.InternalError,
-            `TikTok API authentication failed and token refresh failed: ${refreshError.message}`
-          );
-        }
+    if (data) {
+      if (method === 'GET') {
+        config.params = data;
+      } else {
+        config.data = data;
       }
+    }
+
+    try {
+      this.logger.debug(`Making ${method} request to ${endpoint}`, { data });
+      const response = await axios(config);
       
-      throw new McpError(
-        ErrorCode.InternalError,
-        `TikTok API error: ${error.response?.data?.message || error.message}`
-      );
-    }
-    throw error;
-  }
-}
-
-// MCP Server setup
-const server = new Server(
-  {
-    name: "tiktok-business-api-mcp",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
-);
-
-// Tool definitions with comprehensive TikTok Business API coverage
-const tools = [
-  // MARKETING API - Campaign Management
-  {
-    name: "tiktok_campaign_create",
-    description: "Create a new TikTok advertising campaign",
-    inputSchema: {
-      type: "object",
-      properties: {
-        advertiser_id: { 
-          type: "string", 
-          description: "Advertiser account ID (optional if set in environment)" 
-        },
-        campaign_name: { type: "string", description: "Name of the campaign" },
-        objective_type: { 
-          type: "string", 
-          enum: ["REACH", "TRAFFIC", "APP_INSTALL", "VIDEO_VIEW", "CONVERSIONS", "LEAD_GENERATION"],
-          description: "Campaign objective type"
-        },
-        budget: { type: "number", description: "Campaign budget amount" },
-        budget_mode: { 
-          type: "string", 
-          enum: ["BUDGET_MODE_DAY", "BUDGET_MODE_TOTAL"],
-          description: "Budget mode (daily or total)"
-        },
-        app_promotion_type: { 
-          type: "string", 
-          enum: ["APP_INSTALL", "APP_RETARGETING"],
-          description: "App promotion type (required for APP_INSTALL objective)"
-        }
-      },
-      required: ["campaign_name", "objective_type", "budget", "budget_mode"]
-    }
-  },
-  {
-    name: "tiktok_campaign_get",
-    description: "Get campaign information by advertiser ID",
-    inputSchema: {
-      type: "object",
-      properties: {
-        advertiser_id: { 
-          type: "string", 
-          description: "Advertiser account ID (optional if set in environment)" 
-        },
-        campaign_ids: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Optional array of specific campaign IDs to retrieve"
-        },
-        campaign_name: { type: "string", description: "Filter by campaign name" },
-        objective_type: { type: "string", description: "Filter by objective type" },
-        primary_status: { type: "string", description: "Filter by primary status" },
-        page: { type: "number", description: "Page number for pagination" },
-        page_size: { type: "number", description: "Number of results per page" }
-      },
-      required: []
-    }
-  },
-  {
-    name: "tiktok_campaign_update",
-    description: "Update an existing campaign",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        campaign_id: { type: "string", description: "Campaign ID to update" },
-        campaign_name: { type: "string", description: "New campaign name" },
-        budget: { type: "number", description: "New budget amount" },
-        budget_mode: { type: "string", description: "New budget mode" }
-      },
-      required: ["access_token", "advertiser_id", "campaign_id"]
-    }
-  },
-  {
-    name: "tiktok_campaign_status_update",
-    description: "Update campaign status (enable/disable/delete)",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        campaign_ids: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Array of campaign IDs to update"
-        },
-        operation_status: { 
-          type: "string", 
-          enum: ["ENABLE", "DISABLE", "DELETE"],
-          description: "Operation to perform"
-        }
-      },
-      required: ["access_token", "advertiser_id", "campaign_ids", "operation_status"]
-    }
-  },
-
-  // MARKETING API - Ad Group Management
-  {
-    name: "tiktok_adgroup_create",
-    description: "Create a new ad group within a campaign",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        campaign_id: { type: "string", description: "Parent campaign ID" },
-        adgroup_name: { type: "string", description: "Name of the ad group" },
-        placement_type: { 
-          type: "string", 
-          enum: ["PLACEMENT_TYPE_AUTOMATIC", "PLACEMENT_TYPE_MANUAL"],
-          description: "Placement type"
-        },
-        placements: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Array of placement IDs for manual placement"
-        },
-        target_audience_settings: {
-          type: "object",
-          description: "Targeting settings including demographics, interests, etc."
-        },
-        budget: { type: "number", description: "Ad group budget" },
-        schedule_type: { 
-          type: "string", 
-          enum: ["SCHEDULE_START_END", "SCHEDULE_FROM_NOW"],
-          description: "Schedule type"
-        },
-        schedule_start_time: { type: "string", description: "Start time (YYYY-MM-DD HH:mm:ss)" },
-        schedule_end_time: { type: "string", description: "End time (YYYY-MM-DD HH:mm:ss)" }
-      },
-      required: ["access_token", "advertiser_id", "campaign_id", "adgroup_name", "placement_type"]
-    }
-  },
-  {
-    name: "tiktok_adgroup_get",
-    description: "Get ad group information",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        campaign_ids: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Filter by campaign IDs"
-        },
-        adgroup_ids: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Filter by specific ad group IDs"
-        },
-        page: { type: "number", description: "Page number for pagination" },
-        page_size: { type: "number", description: "Number of results per page" }
-      },
-      required: ["access_token", "advertiser_id"]
-    }
-  },
-
-  // MARKETING API - Ad Management
-  {
-    name: "tiktok_ad_create",
-    description: "Create a new ad within an ad group",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        adgroup_id: { type: "string", description: "Parent ad group ID" },
-        ad_name: { type: "string", description: "Name of the ad" },
-        ad_format: { 
-          type: "string", 
-          enum: ["SINGLE_VIDEO", "SINGLE_IMAGE", "CAROUSEL", "SPARK_AD"],
-          description: "Ad format type"
-        },
-        ad_text: { type: "string", description: "Ad text/copy" },
-        call_to_action: { 
-          type: "string", 
-          description: "Call to action button text"
-        },
-        creative_material_mode: { 
-          type: "string", 
-          enum: ["CUSTOM", "DYNAMIC"],
-          description: "Creative material mode"
-        },
-        video_id: { type: "string", description: "Video creative ID" },
-        image_ids: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Array of image creative IDs"
-        },
-        landing_page_url: { type: "string", description: "Landing page URL" },
-        display_name: { type: "string", description: "Display name for the ad" }
-      },
-      required: ["access_token", "advertiser_id", "adgroup_id", "ad_name", "ad_format"]
-    }
-  },
-  {
-    name: "tiktok_ad_get",
-    description: "Get ad information",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        campaign_ids: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Filter by campaign IDs"
-        },
-        adgroup_ids: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Filter by ad group IDs"
-        },
-        ad_ids: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Filter by specific ad IDs"
-        },
-        page: { type: "number", description: "Page number for pagination" },
-        page_size: { type: "number", description: "Number of results per page" }
-      },
-      required: ["access_token", "advertiser_id"]
-    }
-  },
-
-  // MARKETING API - Creative Management
-  {
-    name: "tiktok_video_upload",
-    description: "Upload a video creative for ads",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        video_file: { type: "string", description: "Video file path or URL" },
-        video_signature: { type: "string", description: "MD5 hash of the video file" },
-        video_size: { type: "number", description: "Video file size in bytes" },
-        video_name: { type: "string", description: "Name for the video creative" },
-        upload_type: { 
-          type: "string", 
-          enum: ["UPLOAD_BY_FILE", "UPLOAD_BY_URL"],
-          description: "Upload method"
-        }
-      },
-      required: ["access_token", "advertiser_id", "video_file", "upload_type"]
-    }
-  },
-  {
-    name: "tiktok_image_upload",
-    description: "Upload an image creative for ads",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        image_file: { type: "string", description: "Image file path or URL" },
-        image_signature: { type: "string", description: "MD5 hash of the image file" },
-        image_size: { type: "number", description: "Image file size in bytes" },
-        image_name: { type: "string", description: "Name for the image creative" },
-        upload_type: { 
-          type: "string", 
-          enum: ["UPLOAD_BY_FILE", "UPLOAD_BY_URL"],
-          description: "Upload method"
-        }
-      },
-      required: ["access_token", "advertiser_id", "image_file", "upload_type"]
-    }
-  },
-
-  // MARKETING API - Reporting
-  {
-    name: "tiktok_report_integrated_get",
-    description: "Get integrated advertising reports with metrics",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        report_type: { 
-          type: "string", 
-          enum: ["BASIC", "AUDIENCE", "PLAYABLE_MATERIAL", "RESERVATION"],
-          description: "Type of report to generate"
-        },
-        data_level: { 
-          type: "string", 
-          enum: ["AUCTION_ADVERTISER", "AUCTION_CAMPAIGN", "AUCTION_ADGROUP", "AUCTION_AD"],
-          description: "Level of data aggregation"
-        },
-        dimensions: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Dimensions to group by (e.g., stat_time_day, gender, age)"
-        },
-        metrics: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Metrics to include (e.g., spend, impressions, clicks, ctr, cpm)"
-        },
-        start_date: { type: "string", description: "Start date (YYYY-MM-DD)" },
-        end_date: { type: "string", description: "End date (YYYY-MM-DD)" },
-        filters: {
-          type: "object",
-          description: "Additional filters for campaigns, ad groups, or ads"
-        },
-        page: { type: "number", description: "Page number for pagination" },
-        page_size: { type: "number", description: "Number of results per page" }
-      },
-      required: ["access_token", "advertiser_id", "report_type", "data_level", "start_date", "end_date"]
-    }
-  },
-
-  // BUSINESS CENTER API
-  {
-    name: "tiktok_bc_advertiser_get",
-    description: "Get Business Center advertiser accounts",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        bc_id: { type: "string", description: "Business Center ID" },
-        page: { type: "number", description: "Page number for pagination" },
-        page_size: { type: "number", description: "Number of results per page" }
-      },
-      required: ["access_token", "bc_id"]
-    }
-  },
-  {
-    name: "tiktok_bc_pixel_create",
-    description: "Create a tracking pixel in Business Center",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        bc_id: { type: "string", description: "Business Center ID" },
-        pixel_name: { type: "string", description: "Name of the pixel" },
-        description: { type: "string", description: "Description of the pixel" }
-      },
-      required: ["access_token", "bc_id", "pixel_name"]
-    }
-  },
-  {
-    name: "tiktok_bc_pixel_get",
-    description: "Get Business Center pixels",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        bc_id: { type: "string", description: "Business Center ID" },
-        pixel_ids: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Optional array of specific pixel IDs to retrieve"
-        },
-        page: { type: "number", description: "Page number for pagination" },
-        page_size: { type: "number", description: "Number of results per page" }
-      },
-      required: ["access_token", "bc_id"]
-    }
-  },
-
-  // ACCOUNTS API
-  {
-    name: "tiktok_account_info_get",
-    description: "Get TikTok account information",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" }
-      },
-      required: ["access_token", "advertiser_id"]
-    }
-  },
-  {
-    name: "tiktok_post_create",
-    description: "Create and publish content to TikTok account",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        video_id: { type: "string", description: "Video creative ID to post" },
-        post_text: { type: "string", description: "Caption text for the post" },
-        privacy_level: { 
-          type: "string", 
-          enum: ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIEND", "SELF_ONLY"],
-          description: "Privacy level for the post"
-        },
-        comment_setting: { 
-          type: "string", 
-          enum: ["EVERYONE", "FRIENDS", "OFF"],
-          description: "Who can comment on the post"
-        },
-        duet_setting: { 
-          type: "string", 
-          enum: ["EVERYONE", "FRIENDS", "OFF"],
-          description: "Who can duet with the post"
-        },
-        stitch_setting: { 
-          type: "string", 
-          enum: ["EVERYONE", "FRIENDS", "OFF"],
-          description: "Who can stitch the post"
-        }
-      },
-      required: ["access_token", "advertiser_id", "video_id"]
-    }
-  },
-  {
-    name: "tiktok_comment_list",
-    description: "Get comments for TikTok posts",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        video_id: { type: "string", description: "Video ID to get comments for" },
-        cursor: { type: "string", description: "Pagination cursor" },
-        count: { type: "number", description: "Number of comments to retrieve" }
-      },
-      required: ["access_token", "advertiser_id", "video_id"]
-    }
-  },
-
-  // CATALOG API
-  {
-    name: "tiktok_catalog_get",
-    description: "Get product catalogs",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        bc_id: { type: "string", description: "Business Center ID" },
-        catalog_id: { type: "string", description: "Specific catalog ID (optional)" }
-      },
-      required: ["access_token", "bc_id"]
-    }
-  },
-  {
-    name: "tiktok_catalog_product_upload",
-    description: "Upload products to a catalog",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        bc_id: { type: "string", description: "Business Center ID" },
-        catalog_id: { type: "string", description: "Catalog ID" },
-        products: { 
-          type: "array", 
-          items: {
-            type: "object",
-            properties: {
-              sku_id: { type: "string" },
-              title: { type: "string" },
-              description: { type: "string" },
-              price: { type: "number" },
-              availability: { type: "string" },
-              image_url: { type: "string" },
-              landing_page_url: { type: "string" }
-            }
-          },
-          description: "Array of product objects to upload"
-        }
-      },
-      required: ["access_token", "bc_id", "catalog_id", "products"]
-    }
-  },
-
-  // CREATOR MARKETPLACE API
-  {
-    name: "tiktok_creator_search",
-    description: "Search for creators in TikTok Creator Marketplace",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        creator_audience_countries: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Target audience countries"
-        },
-        creator_follower_count_min: { type: "number", description: "Minimum follower count" },
-        creator_follower_count_max: { type: "number", description: "Maximum follower count" },
-        creator_audience_age_groups: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Target audience age groups"
-        },
-        creator_audience_genders: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Target audience genders"
-        },
-        page: { type: "number", description: "Page number for pagination" },
-        page_size: { type: "number", description: "Number of results per page" }
-      },
-      required: ["access_token", "advertiser_id"]
-    }
-  },
-
-  // UTILITY/TOOL APIs
-  {
-    name: "tiktok_tool_language",
-    description: "Get supported languages for TikTok advertising",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" }
-      },
-      required: ["access_token", "advertiser_id"]
-    }
-  },
-  {
-    name: "tiktok_tool_region",
-    description: "Get supported regions/countries for targeting",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        placements: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Placement types to get regions for"
-        }
-      },
-      required: ["access_token", "advertiser_id"]
-    }
-  },
-  {
-    name: "tiktok_tool_interest_category",
-    description: "Get interest categories for audience targeting",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        placements: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Placement types to get interests for"
-        },
-        special_industries: { 
-          type: "array", 
-          items: { type: "string" },
-          description: "Special industry categories"
-        }
-      },
-      required: ["access_token", "advertiser_id"]
-    }
-  },
-  {
-    name: "tiktok_trending_hashtags",
-    description: "Get trending hashtags for content inspiration",
-    inputSchema: {
-      type: "object",
-      properties: {
-        access_token: { type: "string", description: "TikTok API access token" },
-        advertiser_id: { type: "string", description: "Advertiser account ID" },
-        country_code: { type: "string", description: "Country code for localized trends" },
-        industry: { type: "string", description: "Industry vertical for relevant hashtags" }
-      },
-      required: ["access_token", "advertiser_id"]
-    }
-  }
-];
-
-// Register tool handlers
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: tools,
-  };
-});
-
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
-  try {
-    switch (name) {
-      // Campaign Management
-      case "tiktok_campaign_create": {
-        const validated = z.object({
-          advertiser_id: AdvertiserIdSchema.default(DEFAULT_ADVERTISER_ID),
-          campaign_name: z.string(),
-          objective_type: z.enum(["REACH", "TRAFFIC", "APP_INSTALL", "VIDEO_VIEW", "CONVERSIONS", "LEAD_GENERATION"]),
-          budget: z.number(),
-          budget_mode: z.enum(["BUDGET_MODE_DAY", "BUDGET_MODE_TOTAL"]),
-          app_promotion_type: z.enum(["APP_INSTALL", "APP_RETARGETING"]).optional(),
-        }).parse(args);
-
-        if (!validated.advertiser_id) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            "Advertiser ID is required. Set TIKTOK_ADVERTISER_ID environment variable or provide advertiser_id parameter."
-          );
-        }
-
-        const result = await makeTikTokRequest(
-          "/campaign/create/",
-          "POST",
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_campaign_get": {
-        const validated = z.object({
-          advertiser_id: AdvertiserIdSchema.default(DEFAULT_ADVERTISER_ID),
-          campaign_ids: z.array(z.string()).optional(),
-          campaign_name: z.string().optional(),
-          objective_type: z.string().optional(),
-          primary_status: z.string().optional(),
-          ...PaginationSchema.shape,
-        }).parse(args);
-
-        if (!validated.advertiser_id) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            "Advertiser ID is required. Set TIKTOK_ADVERTISER_ID environment variable or provide advertiser_id parameter."
-          );
-        }
-
-        const result = await makeTikTokRequest(
-          "/campaign/get/",
-          "GET",
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_campaign_update": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          campaign_id: CampaignIdSchema,
-          campaign_name: z.string().optional(),
-          budget: z.number().optional(),
-          budget_mode: z.string().optional(),
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/campaign/update/",
-          "POST",
-          validated.access_token,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_campaign_status_update": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          campaign_ids: z.array(z.string()),
-          operation_status: z.enum(["ENABLE", "DISABLE", "DELETE"]),
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/campaign/status/update/",
-          "POST",
-          validated.access_token,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      // Ad Group Management
-      case "tiktok_adgroup_create": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          campaign_id: CampaignIdSchema,
-          adgroup_name: z.string(),
-          placement_type: z.enum(["PLACEMENT_TYPE_AUTOMATIC", "PLACEMENT_TYPE_MANUAL"]),
-          placements: z.array(z.string()).optional(),
-          target_audience_settings: z.object({}).optional(),
-          budget: z.number().optional(),
-          schedule_type: z.enum(["SCHEDULE_START_END", "SCHEDULE_FROM_NOW"]).optional(),
-          schedule_start_time: z.string().optional(),
-          schedule_end_time: z.string().optional(),
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/adgroup/create/",
-          "POST",
-          validated.access_token,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_adgroup_get": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          campaign_ids: z.array(z.string()).optional(),
-          adgroup_ids: z.array(z.string()).optional(),
-          ...PaginationSchema.shape,
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/adgroup/get/",
-          "GET",
-          validated.access_token,
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      // Ad Management
-      case "tiktok_ad_create": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          adgroup_id: AdGroupIdSchema,
-          ad_name: z.string(),
-          ad_format: z.enum(["SINGLE_VIDEO", "SINGLE_IMAGE", "CAROUSEL", "SPARK_AD"]),
-          ad_text: z.string().optional(),
-          call_to_action: z.string().optional(),
-          creative_material_mode: z.enum(["CUSTOM", "DYNAMIC"]).optional(),
-          video_id: z.string().optional(),
-          image_ids: z.array(z.string()).optional(),
-          landing_page_url: z.string().optional(),
-          display_name: z.string().optional(),
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/ad/create/",
-          "POST",
-          validated.access_token,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_ad_get": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          campaign_ids: z.array(z.string()).optional(),
-          adgroup_ids: z.array(z.string()).optional(),
-          ad_ids: z.array(z.string()).optional(),
-          ...PaginationSchema.shape,
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/ad/get/",
-          "GET",
-          validated.access_token,
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      // Creative Management
-      case "tiktok_video_upload": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          video_file: z.string(),
-          video_signature: z.string().optional(),
-          video_size: z.number().optional(),
-          video_name: z.string().optional(),
-          upload_type: z.enum(["UPLOAD_BY_FILE", "UPLOAD_BY_URL"]),
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/file/video/ad/upload/",
-          "POST",
-          validated.access_token,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_image_upload": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          image_file: z.string(),
-          image_signature: z.string().optional(),
-          image_size: z.number().optional(),
-          image_name: z.string().optional(),
-          upload_type: z.enum(["UPLOAD_BY_FILE", "UPLOAD_BY_URL"]),
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/file/image/ad/upload/",
-          "POST",
-          validated.access_token,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      // Reporting
-      case "tiktok_report_integrated_get": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          report_type: z.enum(["BASIC", "AUDIENCE", "PLAYABLE_MATERIAL", "RESERVATION"]),
-          data_level: z.enum(["AUCTION_ADVERTISER", "AUCTION_CAMPAIGN", "AUCTION_ADGROUP", "AUCTION_AD"]),
-          dimensions: z.array(z.string()).optional(),
-          metrics: z.array(z.string()).optional(),
-          start_date: z.string(),
-          end_date: z.string(),
-          filters: z.object({}).optional(),
-          ...PaginationSchema.shape,
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/report/integrated/get/",
-          "GET",
-          validated.access_token,
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      // Business Center APIs
-      case "tiktok_bc_advertiser_get": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          bc_id: z.string(),
-          ...PaginationSchema.shape,
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/bc/advertiser/get/",
-          "GET",
-          validated.access_token,
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_bc_pixel_create": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          bc_id: z.string(),
-          pixel_name: z.string(),
-          description: z.string().optional(),
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/bc/pixel/create/",
-          "POST",
-          validated.access_token,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_bc_pixel_get": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          bc_id: z.string(),
-          pixel_ids: z.array(z.string()).optional(),
-          ...PaginationSchema.shape,
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/bc/pixel/get/",
-          "GET",
-          validated.access_token,
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      // Account APIs
-      case "tiktok_account_info_get": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/advertiser/info/",
-          "GET",
-          validated.access_token,
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      // Utility Tools
-      case "tiktok_tool_language": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/tool/language/",
-          "GET",
-          validated.access_token,
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_tool_region": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          placements: z.array(z.string()).optional(),
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/tool/region/",
-          "GET",
-          validated.access_token,
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      case "tiktok_tool_interest_category": {
-        const validated = z.object({
-          access_token: AccessTokenSchema,
-          advertiser_id: AdvertiserIdSchema,
-          placements: z.array(z.string()).optional(),
-          special_industries: z.array(z.string()).optional(),
-        }).parse(args);
-
-        const result = await makeTikTokRequest(
-          "/tool/interest_category/",
-          "GET",
-          validated.access_token,
-          null,
-          validated
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-
-      // Note: Some endpoints like trending hashtags, creator search, etc. 
-      // may require different API bases or additional authentication
-      default:
+      const apiResponse: APIResponse<T> = response.data;
+      
+      if (apiResponse.code !== 0) {
         throw new McpError(
-          ErrorCode.MethodNotFound,
-          `Unknown tool: ${name}`
+          ErrorCode.InternalError,
+          `TikTok API error: ${apiResponse.message} (Code: ${apiResponse.code})`
         );
-    }
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Invalid parameters: ${error.issues.map(i => i.message).join(", ")}`
-      );
-    }
-    throw error;
-  }
-});
+      }
 
-// Start the server
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("TikTok Business API MCP server running on stdio");
+      this.logger.debug(`Request successful`, { request_id: apiResponse.request_id });
+      return apiResponse.data;
+    } catch (error) {
+      if (error instanceof McpError) {
+        throw error;
+      }
+
+      if (axios.isAxiosError(error)) {
+        const axiosError = error as AxiosError;
+        
+        if (axiosError.response?.status === 429) {
+          this.logger.warn('Rate limit exceeded, waiting before retry');
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          return this.makeRequest(method, endpoint, data, customConfig);
+        }
+
+        if (axiosError.response?.status === 401) {
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            'Authentication failed. Please check your access token.'
+          );
+        }
+
+        const errorMessage = axiosError.response?.data?.message || axiosError.message;
+        this.logger.error(`API request failed`, {
+          status: axiosError.response?.status,
+          message: errorMessage,
+          url
+        });
+
+        throw new McpError(
+          ErrorCode.InternalError,
+          `API request failed: ${errorMessage}`
+        );
+      }
+
+      this.logger.error('Unexpected error during API request', error);
+      throw new McpError(ErrorCode.InternalError, 'Unexpected error occurred');
+    }
+  }
+
+  // Campaign Management
+  async createCampaign(params: z.infer<typeof CampaignCreateSchema>) {
+    const requestData = {
+      advertiser_id: params.advertiser_id || this.config.advertiserId,
+      campaign_name: params.campaign_name,
+      objective_type: params.objective_type,
+      budget: params.budget,
+      budget_mode: params.budget_mode,
+      schedule_type: params.schedule_type,
+      ...(params.schedule_start_time && { schedule_start_time: params.schedule_start_time }),
+      ...(params.schedule_end_time && { schedule_end_time: params.schedule_end_time }),
+    };
+
+    return this.makeRequest('POST', '/open_api/v1.3/campaign/create/', requestData);
+  }
+
+  async getCampaigns(params: z.infer<typeof CampaignGetSchema>) {
+    const requestData = {
+      advertiser_id: params.advertiser_id || this.config.advertiserId,
+      page: params.page,
+      page_size: params.page_size,
+      ...(params.campaign_ids && { campaign_ids: params.campaign_ids }),
+      ...(params.filtering && { filtering: params.filtering }),
+    };
+
+    return this.makeRequest('GET', '/open_api/v1.3/campaign/get/', requestData);
+  }
+
+  // Creative Management
+  async uploadVideo(params: z.infer<typeof VideoUploadSchema>) {
+    const requestData = {
+      advertiser_id: params.advertiser_id || this.config.advertiserId,
+      upload_type: params.upload_type,
+      video_name: params.video_name,
+      flaw_detect: params.flaw_detect,
+      auto_bind_enabled: params.auto_bind_enabled,
+      auto_fix_enabled: params.auto_fix_enabled,
+    };
+
+    if (params.upload_type === 'UPLOAD_BY_URL') {
+      requestData.video_url = params.video_file;
+    } else if (params.upload_type === 'UPLOAD_BY_FILE_ID') {
+      requestData.video_id = params.video_file;
+    }
+
+    return this.makeRequest('POST', '/open_api/v1.3/file/video/upload/', requestData);
+  }
+
+  // Reporting
+  async getReport(params: z.infer<typeof ReportSchema>) {
+    const requestData = {
+      advertiser_id: params.advertiser_id || this.config.advertiserId,
+      report_type: params.report_type,
+      data_level: params.data_level,
+      dimensions: params.dimensions,
+      metrics: params.metrics,
+      start_date: params.start_date,
+      end_date: params.end_date,
+      page: params.page,
+      page_size: params.page_size,
+      ...(params.filters && { filters: params.filters }),
+    };
+
+    return this.makeRequest('GET', '/open_api/v1.3/report/integrated/get/', requestData);
+  }
 }
 
-main().catch((error) => {
-  console.error("Fatal error in main():", error);
-  process.exit(1);
+// Configuration and Initialization
+function loadConfig(): TikTokConfig {
+  const accessToken = process.env.TIKTOK_ACCESS_TOKEN;
+  const advertiserId = process.env.TIKTOK_ADVERTISER_ID;
+
+  if (!accessToken) {
+    throw new Error('TIKTOK_ACCESS_TOKEN environment variable is required');
+  }
+
+  if (!advertiserId) {
+    throw new Error('TIKTOK_ADVERTISER_ID environment variable is required');
+  }
+
+  return {
+    accessToken,
+    advertiserId,
+    appId: process.env.TIKTOK_APP_ID,
+    appSecret: process.env.TIKTOK_APP_SECRET,
+    apiBaseUrl: process.env.TIKTOK_API_BASE_URL || 'https://business-api.tiktok.com',
+    rateLimitRpm: parseInt(process.env.TIKTOK_RATE_LIMIT_RPM || '200'),
+  };
+}
+
+// Main Server Implementation
+async function main() {
+  const logger = new Logger('TikTokMCPServer');
+  
+  try {
+    const config = loadConfig();
+    const apiClient = new TikTokAPIClient(config);
+    
+    const server = new Server(
+      {
+        name: "tiktok-business-mcp",
+        version: "1.0.0",
+      },
+      {
+        capabilities: {
+          tools: {},
+        },
+      }
+    );
+
+    // Tool Definitions
+    const tools = [
+      {
+        name: "tiktok_campaign_create",
+        description: "Create a new TikTok advertising campaign",
+        inputSchema: {
+          type: "object",
+          properties: {
+            campaign_name: { type: "string", description: "Campaign name (1-512 characters)" },
+            objective_type: { 
+              type: "string", 
+              enum: ['REACH', 'TRAFFIC', 'APP_INSTALL', 'VIDEO_VIEW', 'LEAD_GENERATION', 'CONVERSIONS', 'CATALOG_SALES'],
+              description: "Campaign objective" 
+            },
+            budget: { type: "number", minimum: 0.01, description: "Campaign budget" },
+            budget_mode: { 
+              type: "string", 
+              enum: ['BUDGET_MODE_DAY', 'BUDGET_MODE_TOTAL'],
+              description: "Budget allocation mode" 
+            },
+            schedule_type: { 
+              type: "string", 
+              enum: ['SCHEDULE_FROM_NOW', 'SCHEDULE_START_END'],
+              description: "Campaign scheduling type" 
+            },
+            schedule_start_time: { type: "string", description: "Start time (YYYY-MM-DD HH:mm:ss)" },
+            schedule_end_time: { type: "string", description: "End time (YYYY-MM-DD HH:mm:ss)" },
+          },
+          required: ["campaign_name", "objective_type", "budget", "budget_mode"],
+        },
+      },
+      {
+        name: "tiktok_campaign_get",
+        description: "Retrieve campaign information with filtering and pagination",
+        inputSchema: {
+          type: "object",
+          properties: {
+            campaign_ids: { 
+              type: "array", 
+              items: { type: "string" },
+              description: "Specific campaign IDs to retrieve" 
+            },
+            page: { type: "number", minimum: 1, default: 1, description: "Page number" },
+            page_size: { type: "number", minimum: 1, maximum: 1000, default: 20, description: "Results per page" },
+            filtering: {
+              type: "object",
+              properties: {
+                campaign_name: { type: "string", description: "Filter by campaign name" },
+                primary_status: { 
+                  type: "string", 
+                  enum: ['ENABLE', 'DISABLE', 'DELETE'],
+                  description: "Filter by campaign status" 
+                },
+                objective_type: { type: "string", description: "Filter by objective type" },
+              },
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "tiktok_video_upload",
+        description: "Upload video creative for advertising campaigns",
+        inputSchema: {
+          type: "object",
+          properties: {
+            video_file: { type: "string", description: "Video URL, file ID, or base64 content" },
+            upload_type: { 
+              type: "string", 
+              enum: ['UPLOAD_BY_FILE', 'UPLOAD_BY_URL', 'UPLOAD_BY_FILE_ID'],
+              description: "Upload method" 
+            },
+            video_name: { type: "string", maxLength: 100, description: "Video name" },
+            flaw_detect: { type: "boolean", default: true, description: "Enable flaw detection" },
+            auto_bind_enabled: { type: "boolean", default: true, description: "Enable auto-binding" },
+            auto_fix_enabled: { type: "boolean", default: true, description: "Enable auto-fix" },
+          },
+          required: ["video_file", "upload_type", "video_name"],
+        },
+      },
+      {
+        name: "tiktok_report_get",
+        description: "Generate comprehensive advertising reports and analytics",
+        inputSchema: {
+          type: "object",
+          properties: {
+            report_type: { 
+              type: "string", 
+              enum: ['BASIC', 'AUDIENCE', 'PLAYABLE_REPORT'],
+              description: "Report type" 
+            },
+            data_level: { 
+              type: "string", 
+              enum: ['AUCTION_ADVERTISER', 'AUCTION_CAMPAIGN', 'AUCTION_ADGROUP', 'AUCTION_AD'],
+              description: "Data aggregation level" 
+            },
+            dimensions: { 
+              type: "array", 
+              items: { type: "string" },
+              description: "Report dimensions (e.g., stat_time_day, campaign_id)" 
+            },
+            metrics: { 
+              type: "array", 
+              items: { type: "string" },
+              description: "Metrics to include (e.g., spend, impressions, clicks)" 
+            },
+            start_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "Start date (YYYY-MM-DD)" },
+            end_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "End date (YYYY-MM-DD)" },
+            filters: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  field_name: { type: "string" },
+                  filter_type: { type: "string", enum: ['IN', 'EQUALS', 'GREATER_THAN', 'LESS_THAN'] },
+                  filter_value: { oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
+                },
+                required: ["field_name", "filter_type", "filter_value"],
+              },
+            },
+            page: { type: "number", minimum: 1, default: 1 },
+            page_size: { type: "number", minimum: 1, maximum: 1000, default: 20 },
+          },
+          required: ["report_type", "data_level", "dimensions", "metrics", "start_date", "end_date"],
+        },
+      },
+    ];
+
+    // Register handlers
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools,
+    }));
+
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+
+      try {
+        logger.info(`Executing tool: ${name}`, { args });
+
+        switch (name) {
+          case "tiktok_campaign_create": {
+            const params = CampaignCreateSchema.parse(args);
+            const result = await apiClient.createCampaign(params);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(result, null, 2),
+                },
+              ],
+            };
+          }
+
+          case "tiktok_campaign_get": {
+            const params = CampaignGetSchema.parse(args);
+            const result = await apiClient.getCampaigns(params);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(result, null, 2),
+                },
+              ],
+            };
+          }
+
+          case "tiktok_video_upload": {
+            const params = VideoUploadSchema.parse(args);
+            const result = await apiClient.uploadVideo(params);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(result, null, 2),
+                },
+              ],
+            };
+          }
+
+          case "tiktok_report_get": {
+            const params = ReportSchema.parse(args);
+            const result = await apiClient.getReport(params);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(result, null, 2),
+                },
+              ],
+            };
+          }
+
+          default:
+            throw new McpError(
+              ErrorCode.MethodNotFound,
+              `Unknown tool: ${name}`
+            );
+        }
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          const errorMessage = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Invalid parameters: ${errorMessage}`
+          );
+        }
+
+        if (error instanceof McpError) {
+          throw error;
+        }
+
+        logger.error(`Tool execution failed: ${name}`, error);
+        throw new McpError(
+          ErrorCode.InternalError,
+          `Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    });
+
+    // Start server
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    
+    logger.info('TikTok Business MCP Server started successfully');
+  } catch (error) {
+    logger.error('Failed to start server', error);
+    process.exit(1);
+  }
+}
+
+// Handle graceful shutdown
+process.on('SIGINT', () => {
+  console.error('Received SIGINT, shutting down gracefully...');
+  process.exit(0);
 });
+
+process.on('SIGTERM', () => {
+  console.error('Received SIGTERM, shutting down gracefully...');
+  process.exit(0);
+});
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}
