@@ -1,0 +1,79 @@
+{
+  "description": "Example MCP client configuration for TikTok Business API MCP Server",
+  "mcpServers": {
+    "tiktok-business-api": {
+      "command": "node",
+      "args": ["./dist/index.js"],
+      "env": {
+        "DEBUG": "false"
+      }
+    }
+  },
+  "examples": {
+    "campaign_creation": {
+      "tool": "tiktok_campaign_create",
+      "arguments": {
+        "access_token": "YOUR_ACCESS_TOKEN_HERE",
+        "advertiser_id": "YOUR_ADVERTISER_ID_HERE", 
+        "campaign_name": "Example Campaign",
+        "objective_type": "CONVERSIONS",
+        "budget": 100.00,
+        "budget_mode": "BUDGET_MODE_TOTAL"
+      }
+    },
+    "get_campaigns": {
+      "tool": "tiktok_campaign_get",
+      "arguments": {
+        "access_token": "YOUR_ACCESS_TOKEN_HERE",
+        "advertiser_id": "YOUR_ADVERTISER_ID_HERE",
+        "page": 1,
+        "page_size": 10
+      }
+    },
+    "upload_video": {
+      "tool": "tiktok_video_upload",
+      "arguments": {
+        "access_token": "YOUR_ACCESS_TOKEN_HERE",
+        "advertiser_id": "YOUR_ADVERTISER_ID_HERE",
+        "video_file": "https://example.com/video.mp4",
+        "upload_type": "UPLOAD_BY_URL",
+        "video_name": "Marketing Video"
+      }
+    },
+    "generate_report": {
+      "tool": "tiktok_report_integrated_get",
+      "arguments": {
+        "access_token": "YOUR_ACCESS_TOKEN_HERE",
+        "advertiser_id": "YOUR_ADVERTISER_ID_HERE",
+        "report_type": "BASIC",
+        "data_level": "AUCTION_CAMPAIGN",
+        "dimensions": ["stat_time_day"],
+        "metrics": ["spend", "impressions", "clicks", "ctr"],
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-31"
+      }
+    }
+  },
+  "authentication": {
+    "oauth2_flow": {
+      "authorization_url": "https://business-api.tiktok.com/portal/auth",
+      "token_url": "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+      "required_scopes": [
+        "user_info.basic",
+        "video.list",
+        "video.upload",
+        "ad_management"
+      ]
+    },
+    "required_parameters": {
+      "app_id": "Your TikTok App ID",
+      "secret": "Your TikTok App Secret", 
+      "redirect_uri": "Your configured redirect URI"
+    }
+  },
+  "notes": {
+    "security": "Never commit real access tokens to version control",
+    "rate_limits": "TikTok APIs have rate limits - implement proper retry logic",
+    "documentation": "Refer to https://ads.tiktok.com/marketing_api/docs for official API docs"
+  }
+}
