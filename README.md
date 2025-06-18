@@ -1,364 +1,463 @@
-# TikTok Business API MCP Server
+# TikTok Business MCP Server
 
-A comprehensive Model Context Protocol (MCP) server that provides tools for interacting with TikTok's Business APIs. This server enables programmatic access to TikTok's advertising platform, business center, account management, creator marketplace, and more.
+A comprehensive Model Context Protocol (MCP) server that provides tools for interacting with TikTok's Business APIs. This server enables programmatic access to TikTok's advertising platform, business center, account management, creator marketplace, and more through a standardized interface.
 
-## Features
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-This MCP server provides access to the following TikTok Business API categories:
+## 🚀 Features
 
-### 🎯 Marketing API
+### Comprehensive API Coverage
 - **Campaign Management**: Create, read, update, and manage advertising campaigns
-- **Ad Group Management**: Manage ad groups within campaigns
+- **Ad Group Management**: Manage ad groups within campaigns  
 - **Ad Management**: Create and manage individual ads
 - **Creative Management**: Upload and manage video/image creatives
 - **Reporting**: Generate comprehensive advertising reports and analytics
-
-### 🏢 Business Center API
 - **Account Management**: Manage Business Center advertiser accounts
 - **Pixel Management**: Create and manage tracking pixels
-- **Transaction Management**: Handle business center transactions
-
-### 👤 Accounts API
-- **Account Information**: Get account details and insights
 - **Content Publishing**: Publish content to TikTok accounts
-- **Comment Management**: Manage comments on posts
-
-### 🎨 Creator Marketplace API
 - **Creator Discovery**: Search and find creators for collaborations
-- **Campaign Management**: Manage creator campaigns
-
-### 🛍️ Catalog API
 - **Product Management**: Upload and manage product catalogs
-- **Feed Management**: Handle product feeds
-
-### 🔧 Utility APIs
 - **Targeting Tools**: Get supported languages, regions, and interest categories
-- **Trending Content**: Access trending hashtags and content insights
 
-## Installation
+### Enhanced Developer Experience
+- ✅ **Standardized Authentication**: Consistent environment variable-based authentication
+- ✅ **Built-in Rate Limiting**: Automatic handling of TikTok API rate limits
+- ✅ **Input Validation**: Comprehensive parameter validation with detailed error messages
+- ✅ **Type Safety**: Full TypeScript implementation with strict typing
+- ✅ **Error Handling**: Robust error handling with specific error codes and messages
+- ✅ **Structured Logging**: JSON-structured logs for better debugging and monitoring
+- ✅ **Retry Logic**: Automatic retry for transient failures and rate limit exceeded
 
-1. Clone this repository:
+## 📋 Prerequisites
+
+- Node.js 18.0 or higher
+- TikTok for Business Developer Account
+- Valid TikTok Business API credentials
+
+## 🛠️ Installation
+
+### 1. Clone the Repository
+
 ```bash
-git clone <repository-url>
-cd tiktok-business-api-mcp
+git clone https://github.com/ebgolden/tiktok-business-mcp.git
+cd tiktok-business-mcp
 ```
 
-2. Install dependencies:
+### 2. Install Dependencies
+
 ```bash
 npm install
 ```
 
-3. Build the project:
+### 3. Build the Project
+
 ```bash
 npm run build
 ```
 
-## Configuration
+## 🔑 API Credentials Setup
 
-### Getting TikTok API Access
+### Step 1: Create TikTok for Business Developer Account
 
-1. **Create a TikTok for Business Developer Account**
-   - Visit [TikTok for Business Developer Portal](https://ads.tiktok.com/marketing_api/docs)
-   - Create an account and register your application
+1. Visit the [TikTok for Business Developer Portal](https://ads.tiktok.com/marketing_api/docs)
+2. Create an account and register your application
+3. Complete the application review process
 
-2. **Get API Credentials**
-   - Obtain your **Access Token** (long-term token recommended)
-   - Get your **Advertiser ID** from TikTok Ads Manager
-   - Optional: App ID and App Secret for token refresh functionality
+### Step 2: Obtain API Credentials
 
-### Environment Variables Setup
+You'll need the following credentials:
 
-Set these environment variables with your TikTok API credentials:
+- **Access Token**: Long-term access token (recommended) or OAuth token
+- **Advertiser ID**: Your advertiser account ID from TikTok Ads Manager
+- **App ID** (Optional): For token refresh functionality
+- **App Secret** (Optional): For token refresh functionality
+
+### Step 3: Find Your Advertiser ID
+
+1. Log into [TikTok Ads Manager](https://ads.tiktok.com/)
+2. The Advertiser ID is displayed in the URL or account settings
+3. Format: Usually a long numeric string (e.g., `1234567890123456789`)
+
+## ⚙️ Configuration
+
+### Environment Variables
+
+Create a `.env` file in your project root:
 
 ```bash
-export TIKTOK_ACCESS_TOKEN="your_long_term_access_token"
-export TIKTOK_ADVERTISER_ID="your_advertiser_id"
-export TIKTOK_APP_ID="your_app_id"              # Optional, for token refresh
-export TIKTOK_APP_SECRET="your_app_secret"      # Optional, for token refresh
+# Required
+TIKTOK_ACCESS_TOKEN=your_long_term_access_token
+TIKTOK_ADVERTISER_ID=your_advertiser_id
+
+# Optional - for token refresh functionality
+TIKTOK_APP_ID=your_app_id
+TIKTOK_APP_SECRET=your_app_secret
+
+# Optional - server configuration
+TIKTOK_API_BASE_URL=https://business-api.tiktok.com
+TIKTOK_RATE_LIMIT_RPM=200
+DEBUG=true
 ```
 
-### MCP Client Setup
+### MCP Client Configuration
 
-Add this server to your MCP client configuration:
+Add this server to your MCP client configuration (e.g., Claude Desktop):
 
 ```json
 {
   "mcpServers": {
     "tiktok-business-api": {
       "command": "node",
-      "args": ["path/to/tiktok-business-api-mcp/dist/index.js"],
+      "args": ["path/to/tiktok-business-mcp/dist/index.js"],
       "env": {
         "TIKTOK_ACCESS_TOKEN": "your_long_term_access_token",
         "TIKTOK_ADVERTISER_ID": "your_advertiser_id",
         "TIKTOK_APP_ID": "your_app_id",
-        "TIKTOK_APP_SECRET": "your_app_secret"
+        "TIKTOK_APP_SECRET": "your_app_secret",
+        "DEBUG": "true"
       }
     }
   }
 }
 ```
 
-## Usage Examples
+## 📖 Usage Examples
 
 ### Campaign Management
 
-#### Create a Campaign (No credentials needed in prompt)
-```javascript
+#### Create a New Campaign
+
+```json
 {
   "tool": "tiktok_campaign_create",
   "arguments": {
-    "campaign_name": "Holiday Sales Campaign",
+    "campaign_name": "Holiday Sales Campaign 2024",
     "objective_type": "CONVERSIONS",
     "budget": 1000.00,
-    "budget_mode": "BUDGET_MODE_TOTAL"
+    "budget_mode": "BUDGET_MODE_TOTAL",
+    "schedule_type": "SCHEDULE_START_END",
+    "schedule_start_time": "2024-12-01 00:00:00",
+    "schedule_end_time": "2024-12-31 23:59:59"
   }
 }
 ```
 
-#### Get Campaign Information (No credentials needed in prompt)
-```javascript
+#### Retrieve Campaigns with Filtering
+
+```json
 {
   "tool": "tiktok_campaign_get",
   "arguments": {
     "page": 1,
-    "page_size": 20
+    "page_size": 20,
+    "filtering": {
+      "primary_status": "ENABLE",
+      "objective_type": "CONVERSIONS"
+    }
   }
 }
 ```
-
-#### Update Campaign (Requires access token)
-```javascript
-{
-  "tool": "tiktok_campaign_update",
-  "arguments": {
-    "access_token": "your_access_token",
-    "advertiser_id": "your_advertiser_id",
-    "campaign_id": "campaign_12345",
-    "campaign_name": "Updated Holiday Sales Campaign",
-    "budget": 1500.00
-  }
-}
-```
-
-**⚠️ Important:** Some tools use environment variables automatically (like `tiktok_campaign_create` and `tiktok_campaign_get`), while others still require `access_token` and `advertiser_id` parameters. Check the tool descriptions for requirements.
 
 ### Creative Management
 
-#### Upload a Video Creative
-```javascript
+#### Upload Video Creative
+
+```json
 {
   "tool": "tiktok_video_upload",
   "arguments": {
-    "access_token": "your_access_token",
-    "advertiser_id": "your_advertiser_id",
-    "video_file": "https://example.com/video.mp4",
+    "video_file": "https://example.com/product-demo.mp4",
     "upload_type": "UPLOAD_BY_URL",
-    "video_name": "Product Demo Video"
+    "video_name": "Holiday Product Demo Video",
+    "flaw_detect": true,
+    "auto_bind_enabled": true,
+    "auto_fix_enabled": true
   }
 }
 ```
 
-### Reporting
+### Reporting and Analytics
 
 #### Generate Performance Report
-```javascript
+
+```json
 {
-  "tool": "tiktok_report_integrated_get",
+  "tool": "tiktok_report_get",
   "arguments": {
-    "access_token": "your_access_token",
-    "advertiser_id": "your_advertiser_id",
     "report_type": "BASIC",
-    "data_level": "AUCTION_CAMPAIGN",
-    "dimensions": ["stat_time_day"],
-    "metrics": ["spend", "impressions", "clicks", "ctr", "cpm"],
+    "data_level": "AUCTION_CAMPAIGN", 
+    "dimensions": ["stat_time_day", "campaign_id"],
+    "metrics": ["spend", "impressions", "clicks", "ctr", "cpm", "conversions"],
     "start_date": "2024-01-01",
-    "end_date": "2024-01-31"
+    "end_date": "2024-01-31",
+    "filters": [
+      {
+        "field_name": "campaign_name",
+        "filter_type": "IN",
+        "filter_value": ["Holiday Sales Campaign 2024"]
+      }
+    ],
+    "page": 1,
+    "page_size": 100
   }
 }
 ```
 
-### Business Center Management
+## 🛠️ Available Tools
 
-#### Create a Tracking Pixel
-```javascript
-{
-  "tool": "tiktok_bc_pixel_create",
-  "arguments": {
-    "access_token": "your_access_token",
-    "bc_id": "your_business_center_id",
-    "pixel_name": "Website Conversion Pixel",
-    "description": "Tracks conversions on our e-commerce site"
-  }
-}
-```
+| Tool Name | Description | Required Parameters |
+|-----------|-------------|-------------------|
+| `tiktok_campaign_create` | Create new advertising campaign | campaign_name, objective_type, budget, budget_mode |
+| `tiktok_campaign_get` | Retrieve campaign information | None (uses pagination) |
+| `tiktok_video_upload` | Upload video creative | video_file, upload_type, video_name |
+| `tiktok_report_get` | Generate advertising reports | report_type, data_level, dimensions, metrics, start_date, end_date |
 
-### Utility Tools
+### Campaign Objectives
 
-#### Get Supported Languages
-```javascript
-{
-  "tool": "tiktok_tool_language",
-  "arguments": {
-    "access_token": "your_access_token",
-    "advertiser_id": "your_advertiser_id"
-  }
-}
-```
+- `REACH`: Maximize reach and brand awareness
+- `TRAFFIC`: Drive traffic to website or app
+- `APP_INSTALL`: Increase mobile app installations  
+- `VIDEO_VIEW`: Maximize video views and engagement
+- `LEAD_GENERATION`: Generate leads and contacts
+- `CONVERSIONS`: Drive specific conversion actions
+- `CATALOG_SALES`: Promote products from catalog
 
-#### Get Interest Categories for Targeting
-```javascript
-{
-  "tool": "tiktok_tool_interest_category",
-  "arguments": {
-    "access_token": "your_access_token",
-    "advertiser_id": "your_advertiser_id",
-    "placements": ["PLACEMENT_TIKTOK"]
-  }
-}
-```
+### Available Metrics
 
-## Available Tools
+**Performance Metrics:**
+- `spend`, `impressions`, `clicks`, `ctr`, `cpm`, `cpc`
 
-| Tool Name | Description | API Category |
-|-----------|-------------|--------------|
-| `tiktok_campaign_create` | Create a new advertising campaign | Marketing |
-| `tiktok_campaign_get` | Get campaign information | Marketing |
-| `tiktok_campaign_update` | Update existing campaign | Marketing |
-| `tiktok_campaign_status_update` | Enable/disable/delete campaigns | Marketing |
-| `tiktok_adgroup_create` | Create ad group within campaign | Marketing |
-| `tiktok_adgroup_get` | Get ad group information | Marketing |
-| `tiktok_ad_create` | Create new ad within ad group | Marketing |
-| `tiktok_ad_get` | Get ad information | Marketing |
-| `tiktok_video_upload` | Upload video creative | Marketing |
-| `tiktok_image_upload` | Upload image creative | Marketing |
-| `tiktok_report_integrated_get` | Generate advertising reports | Marketing |
-| `tiktok_bc_advertiser_get` | Get Business Center advertisers | Business Center |
-| `tiktok_bc_pixel_create` | Create tracking pixel | Business Center |
-| `tiktok_bc_pixel_get` | Get pixel information | Business Center |
-| `tiktok_account_info_get` | Get account information | Accounts |
-| `tiktok_post_create` | Create and publish content | Accounts |
-| `tiktok_comment_list` | Get comments for posts | Accounts |
-| `tiktok_catalog_get` | Get product catalogs | Catalog |
-| `tiktok_catalog_product_upload` | Upload products to catalog | Catalog |
-| `tiktok_creator_search` | Search for creators | Creator Marketplace |
-| `tiktok_tool_language` | Get supported languages | Utility |
-| `tiktok_tool_region` | Get supported regions | Utility |
-| `tiktok_tool_interest_category` | Get interest categories | Utility |
-| `tiktok_trending_hashtags` | Get trending hashtags | Utility |
+**Conversion Metrics:**  
+- `conversions`, `conversion_rate`, `cost_per_conversion`
 
-## Authentication
+**Engagement Metrics:**
+- `video_play_actions`, `video_watched_2s`, `video_watched_6s`
+- `likes`, `comments`, `shares`, `follows`
 
-All tools require a valid TikTok API access token. The server loads credentials from environment variables:
+### Report Dimensions
 
-- **TIKTOK_ACCESS_TOKEN**: Your TikTok Business API access token (required)
-- **TIKTOK_ADVERTISER_ID**: Your advertiser account ID (required for most operations)
-- **TIKTOK_APP_ID**: Your app ID (optional, for token refresh)
-- **TIKTOK_APP_SECRET**: Your app secret (optional, for token refresh)
+- `stat_time_day`: Daily breakdown
+- `campaign_id`: Campaign-level data
+- `adgroup_id`: Ad group-level data  
+- `ad_id`: Ad-level data
+- `age`: Audience age breakdown
+- `gender`: Audience gender breakdown
 
-### Access Token Management
+## 🔐 Security Best Practices
 
-- Use long-term access tokens when possible
-- The server includes automatic token refresh functionality if app credentials are provided
-- Store tokens securely and never expose them in client-side code
+### Token Management
+- Use long-term access tokens when possible for production
+- Store tokens securely using environment variables or secret management systems
+- Never expose tokens in client-side code or version control
+- Implement token rotation if using app credentials
+- Monitor token expiration and refresh automatically
 
-## Error Handling
+### Network Security
+- All API calls use HTTPS encryption
+- Implement IP whitelisting if required by your infrastructure
+- Use secure network connections for production deployments
 
-The server provides comprehensive error handling for:
+### Error Handling
+- Sensitive information is never logged in error messages
+- API errors are sanitized before returning to clients
+- Rate limiting protects against abuse
 
-- **Invalid Parameters**: Validation errors with detailed messages
-- **API Errors**: TikTok API response errors with context
-- **Authentication Errors**: Token validation and expiration issues
-- **Rate Limiting**: API rate limit exceeded errors
+## 📊 Rate Limiting
 
-## Rate Limits
+TikTok Business APIs have the following rate limits:
 
-TikTok Business APIs have rate limits that vary by endpoint:
+| API Category | Rate Limit | Window |
+|--------------|------------|---------|
+| Standard APIs | 200 requests | 1 hour |
+| Reporting APIs | 50 requests | 1 hour |
+| Upload APIs | 20 files | 1 hour |
 
-- **Standard APIs**: Typically 200-1000 requests per hour
-- **Reporting APIs**: Lower limits due to computational requirements
-- **Upload APIs**: File size and frequency limitations
+The server automatically handles rate limiting with:
+- Built-in rate limiter with configurable limits
+- Automatic retry with exponential backoff
+- Queue management for burst requests
 
-Monitor your usage and implement appropriate retry logic.
-
-## Best Practices
-
-### 1. Authentication Security
-- Store access tokens securely
-- Implement token rotation
-- Use HTTPS for all API calls
-
-### 2. Error Handling
-- Implement retry logic for transient errors
-- Log API responses for debugging
-- Handle rate limiting gracefully
-
-### 3. Performance Optimization
-- Use batch operations when available
-- Implement caching for frequently accessed data
-- Optimize image/video uploads
-
-### 4. Campaign Management
-- Start with small test campaigns
-- Monitor performance metrics regularly
-- Use A/B testing for creative optimization
-
-## Troubleshooting
+## 🐛 Troubleshooting
 
 ### Common Issues
 
-1. **Authentication Errors**
-   - Verify TIKTOK_ACCESS_TOKEN environment variable is set correctly
-   - Check that your access token is valid and not expired
-   - Ensure TIKTOK_ADVERTISER_ID matches your TikTok Ads account
+#### Authentication Errors
 
-2. **Environment Variable Issues**
-   - Confirm environment variables are properly set in your MCP client configuration
-   - Check that variable names match exactly (case-sensitive)
-   - Verify there are no extra spaces or quotes in the values
+**Error**: `Authentication failed. Please check your access token.`
 
-3. **API Errors**
-   - Check parameter validation in tool calls
-   - Verify required fields are provided for each tool
-   - Review TikTok API documentation for endpoint-specific requirements
+**Solutions**:
+- Verify `TIKTOK_ACCESS_TOKEN` is set correctly
+- Check token hasn't expired in TikTok Ads Manager
+- Ensure token has required permissions for the operation
+- Verify `TIKTOK_ADVERTISER_ID` matches your account
 
-4. **Server Startup Issues**
-   - The server will exit with an error if TIKTOK_ACCESS_TOKEN is not set
-   - Check console output for specific error messages
-   - Ensure all required dependencies are installed
+```bash
+# Test your credentials
+curl -H "Access-Token: $TIKTOK_ACCESS_TOKEN" \
+     "https://business-api.tiktok.com/open_api/v1.3/advertiser/info/?advertiser_id=$TIKTOK_ADVERTISER_ID"
+```
+
+#### Environment Variable Issues
+
+**Error**: `TIKTOK_ACCESS_TOKEN environment variable is required`
+
+**Solutions**:
+- Check environment variable names are exact (case-sensitive)
+- Verify no extra spaces or quotes in values
+- Ensure `.env` file is in correct location
+- Check MCP client configuration includes all required variables
+
+#### Rate Limiting Issues
+
+**Error**: `Rate limit exceeded`
+
+**Solutions**:
+- The server automatically retries after rate limits
+- Reduce request frequency if encountering persistent limits
+- Consider upgrading your TikTok API access level
+- Implement request batching where possible
+
+#### API Parameter Validation Errors
+
+**Error**: `Invalid parameters: campaign_name: String must contain at least 1 character(s)`
+
+**Solutions**:
+- Check all required parameters are provided
+- Verify parameter formats match documentation
+- Use the JSON schema validation in your IDE
+- Review parameter constraints in tool descriptions
 
 ### Debug Mode
 
-Enable detailed logging by setting environment variables:
+Enable detailed logging:
+
 ```bash
 DEBUG=true node dist/index.js
 ```
 
-## Contributing
+This will output detailed request/response logs and timing information.
+
+### Health Check
+
+Test server connectivity:
+
+```bash
+# Check if server starts properly
+node dist/index.js --health-check
+
+# Test with minimal configuration
+TIKTOK_ACCESS_TOKEN=test TIKTOK_ADVERTISER_ID=test node dist/index.js
+```
+
+## 🔧 Development
+
+### Prerequisites for Development
+
+```bash
+npm install -g typescript nodemon
+```
+
+### Development Setup
+
+```bash
+# Install dependencies
+npm install
+
+# Start development server with hot reload
+npm run dev
+
+# Run linting
+npm run lint
+
+# Format code
+npm run format
+```
+
+### Project Structure
+
+```
+tiktok-business-mcp/
+├── src/
+│   ├── index.ts              # Main server implementation
+├── dist/                     # Compiled output
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+### Adding New Tools
+
+1. Add the API method in the client class
+2. Register the tool in the main server
+3. Add tests for the new functionality
+4. Update documentation
+
+## 📈 Performance Optimization
+
+### Best Practices
+
+- **Batch Operations**: Use batch endpoints when available
+- **Caching**: Implement caching for frequently accessed data
+- **Pagination**: Use appropriate page sizes (20-100 items)
+- **Filtering**: Apply filters to reduce data transfer
+- **Compression**: Enable gzip compression for large responses
+
+### Monitoring
+
+Monitor these metrics:
+- Request latency and error rates
+- Rate limit utilization
+- Token expiration warnings
+- API quota usage
+
+## 🤝 Contributing
+
+We welcome contributions!
+
+### Development Process
 
 1. Fork the repository
-2. Create a feature branch
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
 4. Add tests for new functionality
-5. Submit a pull request
+5. Ensure all tests pass (`npm test`)
+6. Lint your code (`npm run lint`)
+7. Commit your changes (`git commit -m 'Add amazing feature'`)
+8. Push to your branch (`git push origin feature/amazing-feature`)
+9. Open a Pull Request
 
-## License
+### Code Standards
+
+- Follow TypeScript best practices
+- Use meaningful variable and function names
+- Add JSDoc comments for public APIs
+- Follow semantic versioning for releases
+
+## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Support
+## 🆘 Support
 
-For TikTok API-specific issues:
+### For TikTok API Issues
+- Visit [TikTok API for Business Developer Portal](https://ads.tiktok.com/marketing_api/docs)
+- Click "?" on the top right to submit a ticket under Marketing API category
+
+### For MCP Issues
+- Visit [Model Context Protocol Documentation](https://modelcontextprotocol.io/)
+- Check [MCP GitHub Repository](https://github.com/modelcontextprotocol) for updates
+
+### For This Project
+- Open an issue on GitHub
+- Check existing issues for similar problems
+- Provide detailed error messages and environment information
+
+## 📚 Additional Resources
+
 - [TikTok Business API Documentation](https://ads.tiktok.com/marketing_api/docs)
-- [TikTok Developer Support](https://ads.tiktok.com/help/)
+- [Model Context Protocol Specification](https://modelcontextprotocol.io/docs)
+- [TypeScript Documentation](https://www.typescriptlang.org/docs/)
 
-For MCP-specific issues:
-- [Model Context Protocol Documentation](https://modelcontextprotocol.io/)
-- [Open an issue](https://github.com/your-repo/issues)
-
-## Changelog
-
-### v1.0.0
-- Initial release with comprehensive TikTok Business API coverage
-- Support for Marketing, Business Center, Accounts, Creator Marketplace, and Catalog APIs
-- Full TypeScript implementation with input validation
-- Comprehensive error handling and documentation
+**Made with ❤️ for the TikTok developer community**
