@@ -83,7 +83,7 @@ const ReportSchema = BaseToolSchema.extend({
     filter_value: z.union([z.string(), z.array(z.string())]),
   })).optional(),
   page: z.number().int().positive().default(1),
-  page_size: z.number().int().min(1).max(1000).default(20,
+  page_size: z.number().int().min(1).max(1000).default(20),
 });
 
 // Enhanced Logger
@@ -239,7 +239,7 @@ class TikTokAPIClient {
           );
         }
 
-        const errorMessage = axiosError.response?.data?.message || axiosError.message;
+        const errorMessage = (axiosError.response?.data as any)?.message || axiosError.message;
         this.logger.error(`API request failed`, {
           status: axiosError.response?.status,
           message: errorMessage,
@@ -287,7 +287,7 @@ class TikTokAPIClient {
 
   // Creative Management
   async uploadVideo(params: z.infer<typeof VideoUploadSchema>) {
-    const requestData = {
+    const requestData: any = {
       advertiser_id: params.advertiser_id || this.config.advertiserId,
       upload_type: params.upload_type,
       video_name: params.video_name,
